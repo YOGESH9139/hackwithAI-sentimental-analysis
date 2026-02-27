@@ -7,7 +7,7 @@ import time
 import json
 
 from .models import AgentRun
-from agents.crew_factory import create_sentiment_crew
+from core.crew_factory import create_sentiment_crew
 
 logger = get_task_logger(__name__)
 
