@@ -238,6 +238,8 @@ def get_results(request, run_id):
     }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+
+#OPTIONAL not required rn
 @api_view(['GET'])
 def health_check(request):
     """
@@ -262,6 +264,7 @@ def health_check(request):
     }, status=status.HTTP_200_OK)
 
 
+#OPTIONAL not required rn
 @api_view(['GET'])
 def list_recent_runs(request):
     """
@@ -343,6 +346,7 @@ def cancel_run(request, run_id):
     }, status=status.HTTP_200_OK)
 
 
+#OPTIONAL not required rn
 @api_view(['GET'])
 def stats_dashboard(request):
     """

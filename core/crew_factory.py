@@ -1,30 +1,22 @@
 # agents/crew_factory.py
 
 """
-CrewAI Multi-Agent Factory
+Multi-Agent Stock Analysis with Debate Architecture
 
-This module creates a crew of 4 specialized AI agents:
-1. Fundamental News Analyst - Analyzes news and earnings
-2. Technical Chartist - Analyzes price action and indicators
-3. Social Sentiment Analyst - Analyzes social media buzz
-4. Chief Risk Manager - Synthesizes all inputs into final decision
-
-Each agent has different:
-- System prompts (personality/expertise)
-- Tools (data sources)
-- Goals (what they optimize for)
+Architecture:
+Stage 1: Web Surfer - Fetches ALL data once
+Stage 2: Three Independent Analysts (no cross-talk)
+   - Long-Term Value Investor
+   - Momentum Swing Trader
+   - Contrarian Risk Hedge
+Stage 3: Cross-Attack Phase (each agent attacks others)
+Stage 4: Debate Synthesis (evaluates debate quality)
+Stage 5: Final Consensus (Chief makes decision after debate)
 """
 
 from crewai import Agent, Task, Crew, Process
-from langchain_groq import ChatGroq
-from .tools import (
-    NewsSearchTool,
-    PriceAnalysisTool,
-    SocialSentimentTool,
-    create_news_tool,
-    create_price_tool,
-    create_social_tool
-)
+from langchain_google_genai import ChatGoogleGenerativeAI
+from .tools import WebSurferTool, DatasetReaderTool
 import os
 import logging
 
@@ -32,245 +24,56 @@ logger = logging.getLogger(__name__)
 
 
 def get_llm(temperature=0.7):
-    """
-    Initialize Groq LLM
-    
-    Args:
-        temperature: Creativity level (0.0 = deterministic, 1.0 = creative)
-        
-    Returns:
-        ChatGroq: Configured LLM instance
-    """
-    return ChatGroq(
-        model="llama-3.1-70b-versatile",
+    """Initialize Gemini LLM"""
+    return ChatGoogleGenerativeAI(
+        model="gemini-2.5-pro",  # or gemini-2.5-pro if available in your account
         temperature=temperature,
-        api_key=os.getenv("GROQ_API_KEY"),
-        max_tokens=2000
+        google_api_key=os.getenv("GOOGLE_API_KEY"),
+        max_output_tokens=2000,
     )
-
 
 def create_sentiment_crew(ticker: str, timeframe: str = '30d', include_social: bool = True):
     """
-    Creates a multi-agent crew for stock sentiment analysis
+    Creates multi-agent crew with debate architecture
     
-    The crew executes in sequence:
-    1. News Agent searches news and analyzes fundamentals
-    2. Tech Agent analyzes price charts and technical indicators
-    3. Social Agent (optional) analyzes social media sentiment
-    4. Chief Agent synthesizes all inputs and makes final decision
+    Flow:
+    1. Web Surfer → Dataset
+    2. 3 Independent Analysts → Initial Scores
+    3. Cross-Attack Phase → Attack Outputs
+    4. Debate Synthesis → Quality Evaluation
+    5. Chief Consensus → Final Decision
     
     Args:
-        ticker: Stock ticker symbol (e.g., 'TSLA', 'AAPL')
-        timeframe: Historical data period (e.g., '30d', '90d', '1y')
-        include_social: Whether to include social sentiment analysis
+        ticker: Stock ticker symbol
+        timeframe: Historical data period
+        include_social: Include social sentiment
         
     Returns:
-        Crew: Configured CrewAI crew ready to execute
-        
-    Example:
-        >>> crew = create_sentiment_crew('TSLA', '30d', True)
-        >>> result = crew.kickoff()
-        >>> print(result)
+        Crew: Configured CrewAI crew
     """
     
-    logger.info(f"Creating sentiment crew for {ticker} (timeframe: {timeframe}, social: {include_social})")
+    logger.info(f"Creating debate crew for {ticker}")
+    logger.info(f"Architecture: Surfer → 3 Analysts → Cross-Attack → Debate → Chief")
     
-    # Initialize LLM with moderate creativity
     llm = get_llm(temperature=0.7)
     
     # ==========================================
-    # AGENT 1: FUNDAMENTAL NEWS ANALYST
+    # STAGE 1: WEB SURFER (Data Collection)
     # ==========================================
-    news_agent = Agent(
-        role="Fundamental News Analyst",
-        goal=f"Analyze recent news, earnings reports, and fundamental data for {ticker} to determine investment outlook",
-        backstory=f"""You are a veteran Wall Street analyst with 20 years of experience 
-        covering technology and growth stocks. You worked at Goldman Sachs and Morgan Stanley 
-        before becoming an independent analyst.
+    web_surfer = Agent(
+        role="Web Surfer & Data Collector",
+        goal=f"Fetch ALL relevant data for {ticker} in one pass and structure it",
+        backstory="""You are a data collection specialist. Your only job is to gather 
+        information efficiently - NOT to analyze or interpret it.
         
-        Your expertise:
-        - Reading between the lines of earnings calls
-        - Identifying material news that moves stock prices
-        - Analyzing SEC filings (10-K, 10-Q, 8-K)
-        - Understanding competitive dynamics and market positioning
-        - Evaluating management credibility and guidance
+        You fetch:
+        - Financial news and earnings data
+        - Price history and technical indicators
+        - Social media sentiment data
         
-        You ONLY trust verified sources:
-        - Major financial news outlets (Bloomberg, Reuters, WSJ, FT)
-        - Company press releases and SEC filings
-        - Analyst reports from top-tier banks
-        
-        You IGNORE:
-        - Social media rumors and unverified claims
-        - Retail investor speculation
-        - Click-bait headlines
-        
-        Your analysis style:
-        - Conservative and data-driven
-        - Focus on earnings quality and cash flow
-        - Consider macroeconomic headwinds/tailwinds
-        - Highlight both bullish and bearish factors
-        
-        Current task: Analyze {ticker} and provide a sentiment score from -1 (very bearish) 
-        to +1 (very bullish) based purely on fundamentals and news.""",
-        tools=[create_news_tool(ticker)],
-        llm=llm,
-        verbose=True,
-        allow_delegation=False,
-        max_iter=3  # Limit iterations to avoid timeouts
-    )
-    
-    # ==========================================
-    # AGENT 2: TECHNICAL CHARTIST
-    # ==========================================
-    tech_agent = Agent(
-        role="Technical Chartist",
-        goal=f"Analyze price action, chart patterns, and technical indicators for {ticker} to identify trends and momentum",
-        backstory=f"""You are a pure technical analyst who has been trading for 15 years. 
-        You started as a day trader, became a proprietary trader at a Chicago trading firm, 
-        and now run a technical analysis newsletter with 50,000 subscribers.
-        
-        Your philosophy:
-        - "The chart tells you everything" - all information is already in the price
-        - Fundamentals are noise; price action is truth
-        - Volume confirms price movements
-        - Trends persist until proven otherwise
-        
-        Your toolkit:
-        - Candlestick patterns (hammer, engulfing, doji, etc.)
-        - Moving averages (20-day, 50-day, 200-day)
-        - Momentum indicators (RSI, MACD, Stochastic)
-        - Volume analysis (on-balance volume, volume surges)
-        - Support and resistance levels
-        - Fibonacci retracements
-        
-        Your trading rules:
-        - Never fight the trend
-        - Buy breakouts with volume
-        - Sell into overbought conditions (RSI > 70)
-        - Watch for divergences (price vs. indicator)
-        
-        You speak in trader language:
-        - "Breakout above resistance"
-        - "Golden cross" / "Death cross"
-        - "Higher highs and higher lows"
-        - "Mean reversion setup"
-        
-        Current task: Analyze {ticker}'s {timeframe} chart and provide a sentiment score 
-        from -1 (strong bearish technical setup) to +1 (strong bullish technical setup).""",
-        tools=[create_price_tool(ticker, timeframe)],
-        llm=llm,
-        verbose=True,
-        allow_delegation=False,
-        max_iter=3
-    )
-    
-    # ==========================================
-    # AGENT 3: SOCIAL SENTIMENT ANALYST (Optional)
-    # ==========================================
-    social_agent = None
-    if include_social:
-        social_agent = Agent(
-            role="Social Media Sentiment Analyst",
-            goal=f"Gauge retail investor sentiment and social media buzz for {ticker} to predict short-term price movements",
-            backstory=f"""You are a data scientist specializing in social media sentiment analysis. 
-            You worked at a hedge fund that trades on alternative data, specifically social media signals.
-            
-            Your background:
-            - PhD in Natural Language Processing from Stanford
-            - Built sentiment models for cryptocurrency and meme stocks
-            - Predicted GME and AMC squeezes by monitoring r/wallstreetbets
-            - Track influencer activity and viral trends
-            
-            Your data sources:
-            - Reddit (r/wallstreetbets, r/stocks, r/investing, r/options)
-            - Twitter/X ($cashtag mentions and engagement)
-            - StockTwits (bull/bear ratio)
-            - Discord trading communities
-            - YouTube finance channels
-            
-            What you track:
-            - Mention volume (trending = bullish signal)
-            - Sentiment ratio (% bullish vs bearish posts)
-            - Emoji analysis (🚀🌙 = extreme bullish, 💩🐻 = bearish)
-            - Influencer endorsements (impact varies by follower count)
-            - Meme virality (can predict short squeezes)
-            
-            You understand:
-            - Retail sentiment can move stocks short-term (1-5 days)
-            - High social buzz + low float = squeeze potential
-            - Extreme bullishness can be a contrarian sell signal
-            - Social sentiment works best for high-beta growth stocks
-            
-            Your edge:
-            - You separate signal from noise
-            - You know when retail is early vs. late to a trade
-            - You detect coordinated pump-and-dump schemes
-            
-            Current task: Analyze social media sentiment for {ticker} and provide a score 
-            from -1 (very bearish retail sentiment) to +1 (very bullish retail sentiment). 
-            Consider both sentiment and volume of discussions.""",
-            tools=[create_social_tool(ticker)],
-            llm=llm,
-            verbose=True,
-            allow_delegation=False,
-            max_iter=3
-        )
-    
-    # ==========================================
-    # AGENT 4: CHIEF RISK MANAGER (Consensus Builder)
-    # ==========================================
-    chief_agent = Agent(
-        role="Chief Risk Manager",
-        goal=f"Synthesize all analyst inputs to make a final trading recommendation for {ticker} with appropriate risk management",
-        backstory=f"""You are the Chief Risk Officer at a $2 billion long/short equity fund. 
-        You have the final say on all trades. You've survived the 2008 crash, the COVID crash, 
-        and multiple bear markets by being disciplined and risk-aware.
-        
-        Your background:
-        - MBA from Wharton, CFA charter holder
-        - 25 years managing institutional money
-        - Legendary for protecting capital in downturns
-        - Known for saying "No" more than "Yes"
-        
-        Your framework:
-        - Integrate fundamental, technical, and sentiment signals
-        - Weight each input based on conviction and data quality
-        - Consider correlation with broader market
-        - Apply position sizing based on conviction level
-        - Always define risk parameters (stop loss, take profit)
-        
-        Your decision process:
-        1. Review all analyst inputs (News, Technical, Social)
-        2. Identify agreements and disagreements
-        3. Assign confidence weights:
-           - High confidence = all 3 agree
-           - Medium confidence = 2 out of 3 agree
-           - Low confidence = analysts disagree
-        4. Consider market regime (bull/bear/sideways)
-        5. Make final call: BUY / SELL / HOLD
-        6. Set position size (% of portfolio)
-        7. Define exit criteria
-        
-        Your risk management rules:
-        - Never risk more than 2% of portfolio on single trade
-        - Higher conviction = larger position size
-        - Always use stop losses
-        - Cut losses quickly, let winners run
-        - Reduce exposure in high volatility
-        
-        Your output format:
-        - Consensus sentiment score (-1 to +1)
-        - Action (BUY/SELL/HOLD)
-        - Confidence (0-100%)
-        - Recommended allocation (0-30% of portfolio)
-        - Risk level (LOW/MODERATE/HIGH)
-        - Stop loss price (if applicable)
-        - Take profit price (if applicable)
-        - Key reasoning (2-3 sentences)
-        
-        Current task: Review inputs from your analyst team on {ticker} and make the 
-        final trading decision. Be decisive but prudent.""",
+        You structure everything into clean JSON for downstream analysts.
+        You do NOT make judgments or recommendations.""",
+        tools=[WebSurferTool(ticker=ticker, timeframe=timeframe, include_social=include_social)],
         llm=llm,
         verbose=True,
         allow_delegation=False,
@@ -278,261 +81,593 @@ def create_sentiment_crew(ticker: str, timeframe: str = '30d', include_social: b
     )
     
     # ==========================================
-    # CREATE TASKS FOR EACH AGENT
+    # STAGE 2: ANALYST 1 - LONG-TERM VALUE INVESTOR
+    # ==========================================
+    value_investor = Agent(
+        role="Long-Term Value Investor",
+        goal=f"Evaluate whether {ticker} is a fundamentally strong long-term investment regardless of short-term volatility",
+        backstory="""You are a Buffett-style value investor with 25 years managing capital.
+        
+        Your philosophy:
+        - "If I can't hold it 5 years, I don't want it 5 minutes"
+        - Price is what you pay, value is what you get
+        - Mr. Market is bipolar - you exploit his emotions, not follow them
+        - Moats matter more than momentum
+        
+        You survived:
+        - 2008 financial crisis (bought when others panicked)
+        - Dot-com bubble (avoided the hype)
+        - COVID crash (accumulated quality at discounts)
+        
+        What you care about:
+        - Sustainable competitive advantages
+        - Management quality and capital allocation
+        - Free cash flow generation
+        - Balance sheet strength
+        - Earnings quality (not just EPS beats)
+        
+        What you IGNORE:
+        - Short-term price movements
+        - Social media hype
+        - Momentum signals
+        - Technical patterns
+        
+        Your biases:
+        - Discount social sentiment heavily (-50% weight)
+        - Skeptical of "hot stocks"
+        - Prefer boring, predictable businesses
+        - Think most traders overreact
+        
+        You are CONSERVATIVE and patient. You'd rather miss 10 opportunities than make 1 mistake.""",
+        tools=[DatasetReaderTool()],
+        llm=llm,
+        verbose=True,
+        allow_delegation=False,
+        max_iter=2
+    )
+    
+    # ==========================================
+    # STAGE 2: ANALYST 2 - MOMENTUM SWING TRADER
+    # ==========================================
+    momentum_trader = Agent(
+        role="Momentum Swing Trader",
+        goal=f"Identify short-to-medium term price opportunities in {ticker} based on momentum and technical positioning",
+        backstory="""You are a former proprietary trader at a Chicago firm. You trade 1-4 week swings.
+        
+        Your philosophy:
+        - "Trend is king, everything else is noise"
+        - Price action discounts all information
+        - Ride momentum until it breaks
+        - Cut losses fast, let winners run
+        
+        Your edge:
+        - You read charts like a book
+        - You smell breakouts before they happen
+        - You understand volume tells the truth
+        - You know when institutions are accumulating
+        
+        What you care about:
+        - Price breaking key levels
+        - Volume surges confirming moves
+        - RSI and MACD momentum
+        - Social buzz as a short-term catalyst
+        - Relative strength vs market
+        
+        What you IGNORE:
+        - Long-term fundamentals
+        - P/E ratios and balance sheets
+        - Whether the company will exist in 5 years
+        - Value investor opinions
+        
+        Your biases:
+        - Social spikes = trading opportunity
+        - Earnings only matter if they move price
+        - Fundamentals are backward-looking
+        - Technical setups > everything
+        
+        You are AGGRESSIVE and conviction-driven. You'd rather be wrong fast than right slow.""",
+        tools=[DatasetReaderTool()],
+        llm=llm,
+        verbose=True,
+        allow_delegation=False,
+        max_iter=2
+    )
+    
+    # ==========================================
+    # STAGE 2: ANALYST 3 - CONTRARIAN RISK HEDGE
+    # ==========================================
+    contrarian = Agent(
+        role="Contrarian Risk Strategist",
+        goal=f"Identify hidden risks and overconfidence in current market positioning of {ticker}",
+        backstory="""You are a former macro hedge fund analyst who specializes in tail risks.
+        
+        Your philosophy:
+        - "If everyone agrees, someone is wrong"
+        - Markets overreact to everything
+        - The crowd is right during trends, wrong at extremes
+        - Asymmetry > conviction
+        
+        Your track record:
+        - Called the 2021 meme stock reversal
+        - Warned about crypto leverage in 2022
+        - Profited from COVID volatility spikes
+        
+        What you hunt for:
+        - Crowded trades
+        - Overconfidence signals
+        - Hidden leverage
+        - Sentiment extremes
+        - Positioning imbalances
+        
+        Your contrarian signals:
+        - High social bullishness = bearish
+        - Extreme technical breakouts = mean reversion setup
+        - Everyone bullish = time to fade
+        - Universal bearishness = buying opportunity
+        
+        What you analyze:
+        - Put/call ratios
+        - Social sentiment extremes
+        - Technical overbought/oversold
+        - Fundamental disconnects from price
+        
+        Your biases:
+        - You LOVE disagreement
+        - You distrust consensus
+        - You think most analysts are sheep
+        - You believe volatility = opportunity
+        
+        You are SKEPTICAL and risk-focused. You'd rather miss gains than ignore warnings.""",
+        tools=[DatasetReaderTool()],
+        llm=llm,
+        verbose=True,
+        allow_delegation=False,
+        max_iter=2
+    )
+    
+    # ==========================================
+    # STAGE 4: DEBATE SYNTHESIS AGENT
+    # ==========================================
+    debate_moderator = Agent(
+        role="Debate Quality Evaluator",
+        goal=f"Evaluate the quality and intensity of debate between analysts on {ticker}",
+        backstory="""You are a debate judge and critical thinking expert.
+        
+        Your job is NOT to pick winners. Your job is to evaluate argumentation quality.
+        
+        You assess:
+        - Strength of evidence presented
+        - Logical consistency
+        - Identification of weaknesses in opposing views
+        - Quality of counterarguments
+        - Confidence calibration
+        
+        You identify:
+        - Where analysts agree (convergent signals)
+        - Where they conflict (divergent signals)
+        - Whose argument is most data-driven
+        - Whose argument has the most holes
+        - Which risks are unresolved
+        
+        You measure:
+        - Debate intensity (how much disagreement)
+        - Confidence shifts after cross-examination
+        - Strength of consensus (if any)
+        
+        You DO NOT make trading decisions. You provide meta-analysis of the debate.""",
+        llm=llm,
+        verbose=True,
+        allow_delegation=False,
+        max_iter=2
+    )
+    
+    # ==========================================
+    # STAGE 5: CHIEF RISK MANAGER
+    # ==========================================
+    chief = Agent(
+        role="Chief Risk Manager",
+        goal=f"Make final trading decision on {ticker} after reviewing full debate",
+        backstory="""You are the CRO at a $2B long/short fund. You have the final word.
+        
+        You receive:
+        - 3 initial analyst views
+        - Cross-attack outputs
+        - Debate quality evaluation
+        - Revised confidence scores
+        
+        Your decision framework:
+        1. Weight analyst inputs based on:
+           - Strength of argumentation
+           - Quality of evidence
+           - Historical accuracy (you know their biases)
+        
+        2. Resolve conflicts:
+           - When Value + Contrarian agree → strong signal
+           - When Momentum isolated → fade or reduce size
+           - When all three agree → rare, high conviction
+           - When all three disagree → HOLD
+        
+        3. Adjust for debate quality:
+           - Weak debate = lower confidence
+           - Strong attacks = increase skepticism
+           - Unresolved risks = reduce allocation
+        
+        Your weighting heuristic:
+        - Value Investor: 35% (long-term anchor)
+        - Momentum Trader: 30% (timing signal)
+        - Contrarian: 25% (risk check)
+        - Debate Quality: 10% (confidence adjustment)
+        
+        You are DECISIVE but PRUDENT. Capital preservation > FOMO.""",
+        llm=llm,
+        verbose=True,
+        allow_delegation=False,
+        max_iter=2
+    )
+    
+    # ==========================================
+    # TASKS
     # ==========================================
     
-    # Task 1: News Analysis
-    news_task = Task(
-        description=f"""Search for and analyze the most recent news about {ticker}.
+    # Task 1: Web Surfer Data Collection
+    surfer_task = Task(
+        description=f"""Fetch and structure ALL data for {ticker}.
         
-        Your analysis should cover:
-        1. Recent earnings report (if available in last 90 days)
-           - Revenue and EPS vs. expectations
-           - Management guidance
-           - Margin trends
+        Collect:
+        1. News data (last 30 days): headlines, summaries, sources
+        2. Price data ({timeframe}): OHLC, MAs, RSI, MACD, volume
+        3. Social data: sentiment score, mention volume, trending topics
         
-        2. Material news events (last 30 days)
-           - Product launches or delays
-           - Regulatory news
-           - Management changes
-           - M&A activity
-           - Analyst upgrades/downgrades
-        
-        3. Competitive dynamics
-           - Market share trends
-           - Competitive threats or advantages
-        
-        4. Macroeconomic factors
-           - Industry tailwinds or headwinds
-           - Interest rate sensitivity
-        
-        OUTPUT FORMAT (return as valid JSON):
-        {{
-            "score": <float between -1 and 1>,
-            "reasoning": "<detailed 3-4 sentence explanation>",
-            "confidence": <integer 0-100>,
-            "key_data": "<single most important fact or headline>"
-        }}
-        
-        Example:
-        {{
-            "score": 0.65,
-            "reasoning": "Q4 earnings beat expectations with 15% revenue growth. Management raised FY guidance citing strong demand and pricing power. Gross margins expanded 200bps due to operational efficiencies. One concern is rising R&D costs.",
-            "confidence": 82,
-            "key_data": "Q4 EPS: $1.85 vs $1.60 expected (16% beat)"
-        }}""",
-        expected_output="JSON object with score, reasoning, confidence, and key_data fields",
-        agent=news_agent
+        OUTPUT: JSON dataset with all three sections.
+        Store this - other agents will read from it.""",
+        expected_output="JSON dataset with news_data, price_data, social_data",
+        agent=web_surfer
     )
     
-    # Task 2: Technical Analysis
-    tech_task = Task(
-        description=f"""Analyze the {timeframe} price chart and technical indicators for {ticker}.
+    # Task 2: Value Investor Initial Analysis
+    value_task = Task(
+        description=f"""Read the dataset and analyze {ticker} as a LONG-TERM VALUE INVESTMENT.
         
-        Your analysis should include:
-        1. Current trend
-           - Uptrend, downtrend, or sideways?
-           - Strength of trend
+        Focus on:
+        - Business quality and competitive moat
+        - Financial health (balance sheet, cash flow)
+        - Management track record
+        - Sustainable earnings power
+        - Valuation relative to intrinsic value
         
-        2. Key moving averages
-           - Current price vs 20-day, 50-day, 200-day MA
-           - Golden cross or death cross patterns
+        IGNORE short-term price action and social hype.
         
-        3. Momentum indicators
-           - RSI: Overbought (>70), Oversold (<30), or Neutral
-           - MACD: Bullish or bearish crossover?
-        
-        4. Volume analysis
-           - Volume trend (increasing or decreasing)
-           - Volume on up days vs down days
-        
-        5. Support and resistance
-           - Key price levels to watch
-        
-        6. Chart patterns
-           - Breakouts, breakdowns, consolidations
-        
-        OUTPUT FORMAT (return as valid JSON):
+        OUTPUT (valid JSON):
         {{
-            "score": <float between -1 and 1>,
-            "reasoning": "<detailed technical analysis 3-4 sentences>",
-            "confidence": <integer 0-100>,
-            "key_data": "<key technical signal, e.g., 'Breakout above $250 resistance'>"
-        }}
-        
-        Example:
-        {{
-            "score": 0.42,
-            "reasoning": "Stock broke above 20-day MA with strong volume, confirming short-term uptrend. RSI at 58 shows momentum without being overbought. MACD histogram turning positive. However, still trading below 50-day MA which acts as resistance.",
-            "confidence": 71,
-            "key_data": "Bullish breakout above $245 with 2x average volume"
+            "agent": "value_investor",
+            "initial_score": <float -1 to 1>,
+            "confidence": <int 0-100>,
+            "reasoning": "<3-4 sentences on fundamental quality>",
+            "bull_case": "<strongest long-term positive>",
+            "bear_case": "<biggest fundamental risk>",
+            "key_data": "<most important metric>",
+            "time_horizon": "3-5 years"
         }}""",
-        expected_output="JSON object with score, reasoning, confidence, and key_data fields",
-        agent=tech_agent
+        expected_output="JSON with value investment analysis",
+        agent=value_investor,
+        context=[surfer_task]
     )
     
-    # Task 3: Social Sentiment (if enabled)
-    social_task = None
-    if include_social and social_agent:
-        social_task = Task(
-            description=f"""Analyze social media sentiment and discussion volume for {ticker}.
-            
-            Your analysis should cover:
-            1. Discussion volume
-               - Is {ticker} trending on social platforms?
-               - Volume compared to 7-day and 30-day average
-            
-            2. Sentiment ratio
-               - % of bullish vs bearish posts
-               - Sentiment intensity (mild vs extreme)
-            
-            3. Key themes in discussions
-               - What are retail investors excited/worried about?
-               - Are there coordinated movements (e.g., short squeeze talk)?
-            
-            4. Influencer activity
-               - Are major finance influencers talking about {ticker}?
-               - Bullish or bearish stance?
-            
-            5. Meme potential
-               - Is this becoming a "meme stock"?
-               - Emoji usage (🚀🌙 = bullish, 💩🐻 = bearish)
-            
-            OUTPUT FORMAT (return as valid JSON):
-            {{
-                "score": <float between -1 and 1>,
-                "reasoning": "<3-4 sentence analysis of social sentiment>",
-                "confidence": <integer 0-100>,
-                "key_data": "<key metric, e.g., '84% bullish posts, 3x normal volume'>"
-            }}
-            
-            Example:
-            {{
-                "score": 0.78,
-                "reasoning": "Reddit mentions up 250% week-over-week with 84% bullish sentiment. Multiple posts highlighting Q4 earnings beat. StockTwits shows 'Extremely Bullish' indicator. Some influencers calling for breakout to $300.",
-                "confidence": 65,
-                "key_data": "r/wallstreetbets mentions: 847 posts (up 250% WoW)"
-            }}""",
-            expected_output="JSON object with score, reasoning, confidence, and key_data fields",
-            agent=social_agent
-        )
+    # Task 3: Momentum Trader Initial Analysis
+    momentum_task = Task(
+        description=f"""Read the dataset and analyze {ticker} as a MOMENTUM SWING TRADE.
+        
+        Focus on:
+        - Price trend and breakout potential
+        - Technical indicator alignment (RSI, MACD)
+        - Volume confirmation
+        - Social buzz as short-term catalyst
+        - Relative strength
+        
+        IGNORE fundamental valuation and long-term concerns.
+        
+        OUTPUT (valid JSON):
+        {{
+            "agent": "momentum_trader",
+            "initial_score": <float -1 to 1>,
+            "confidence": <int 0-100>,
+            "reasoning": "<3-4 sentences on technical setup>",
+            "bull_case": "<strongest momentum signal>",
+            "bear_case": "<biggest technical risk>",
+            "key_data": "<key price level or indicator>",
+            "time_horizon": "1-4 weeks"
+        }}""",
+        expected_output="JSON with momentum analysis",
+        agent=momentum_trader,
+        context=[surfer_task]
+    )
     
-    # Task 4: Chief's Final Decision
+    # Task 4: Contrarian Initial Analysis
+    contrarian_task = Task(
+        description=f"""Read the dataset and analyze {ticker} for CONTRARIAN OPPORTUNITIES/RISKS.
+        
+        Focus on:
+        - Sentiment extremes (too bullish = bearish signal)
+        - Crowded positioning
+        - Technical overbought/oversold
+        - Disconnects between price and fundamentals
+        - Hidden tail risks
+        
+        Be SKEPTICAL. Look for what others are missing.
+        
+        OUTPUT (valid JSON):
+        {{
+            "agent": "contrarian",
+            "initial_score": <float -1 to 1>,
+            "confidence": <int 0-100>,
+            "reasoning": "<3-4 sentences on contrarian view>",
+            "bull_case": "<contrarian opportunity if any>",
+            "bear_case": "<contrarian risk or warning>",
+            "key_data": "<key contrarian signal>",
+            "positioning": "CROWDED_LONG" or "CROWDED_SHORT" or "BALANCED"
+        }}""",
+        expected_output="JSON with contrarian analysis",
+        agent=contrarian,
+        context=[surfer_task]
+    )
+    
+    # Task 5: Value Investor Cross-Attack
+    value_attack_task = Task(
+        description=f"""You've seen the other two analysts' outputs. Now ATTACK their logic.
+        
+        You have:
+        - Momentum Trader's analysis (overweights technicals, ignores fundamentals)
+        - Contrarian's analysis (overly skeptical, may miss obvious value)
+        
+        Challenge them:
+        - Why is the Momentum Trader wrong to ignore fundamentals?
+        - Why is the Contrarian too pessimistic or missing the bigger picture?
+        - What are they overlooking that you see?
+        
+        OUTPUT (valid JSON):
+        {{
+            "agent": "value_investor",
+            "attacks": {{
+                "momentum_trader": {{
+                    "weaknesses": "<specific flaws in their argument>",
+                    "missing_factors": "<what they ignored>",
+                    "why_value_wins": "<why fundamentals matter more>"
+                }},
+                "contrarian": {{
+                    "weaknesses": "<specific flaws in their argument>",
+                    "missing_factors": "<what they ignored>",
+                    "why_value_wins": "<why their skepticism is misplaced>"
+                }}
+            }},
+            "revised_score": <float -1 to 1, after considering attacks>,
+            "confidence_adjustment": <int -20 to +20>
+        }}""",
+        expected_output="JSON with value investor's attacks",
+        agent=value_investor,
+        context=[value_task, momentum_task, contrarian_task]
+    )
+    
+    # Task 6: Momentum Trader Cross-Attack
+    momentum_attack_task = Task(
+        description=f"""You've seen the other two analysts' outputs. Now ATTACK their logic.
+        
+        You have:
+        - Value Investor's analysis (too slow, misses momentum)
+        - Contrarian's analysis (overly negative, fights the trend)
+        
+        Challenge them:
+        - Why is the Value Investor wrong to ignore price action?
+        - Why is the Contrarian wrong to fight momentum?
+        - What are they missing that the chart is screaming?
+        
+        OUTPUT (valid JSON):
+        {{
+            "agent": "momentum_trader",
+            "attacks": {{
+                "value_investor": {{
+                    "weaknesses": "<why fundamentals are too slow>",
+                    "missing_factors": "<price signals they ignore>",
+                    "why_momentum_wins": "<why trend > value>"
+                }},
+                "contrarian": {{
+                    "weaknesses": "<why fighting the trend is dumb>",
+                    "missing_factors": "<momentum they're ignoring>",
+                    "why_momentum_wins": "<why the trend will continue>"
+                }}
+            }},
+            "revised_score": <float -1 to 1>,
+            "confidence_adjustment": <int -20 to +20>
+        }}""",
+        expected_output="JSON with momentum trader's attacks",
+        agent=momentum_trader,
+        context=[value_task, momentum_task, contrarian_task]
+    )
+    
+    # Task 7: Contrarian Cross-Attack
+    contrarian_attack_task = Task(
+        description=f"""You've seen the other two analysts' outputs. Now ATTACK their logic.
+        
+        You have:
+        - Value Investor's analysis (too optimistic, ignores risks)
+        - Momentum Trader's analysis (chasing, ignoring overextension)
+        
+        Challenge them:
+        - Why is the Value Investor underestimating risks?
+        - Why is the Momentum Trader chasing a topped-out move?
+        - What red flags are they both missing?
+        
+        OUTPUT (valid JSON):
+        {{
+            "agent": "contrarian",
+            "attacks": {{
+                "value_investor": {{
+                    "weaknesses": "<risks they're ignoring>",
+                    "missing_factors": "<negative signals>",
+                    "why_contrarian_wins": "<why caution is warranted>"
+                }},
+                "momentum_trader": {{
+                    "weaknesses": "<why they're chasing>",
+                    "missing_factors": "<reversal signals>",
+                    "why_contrarian_wins": "<why momentum will fail>"
+                }}
+            }},
+            "revised_score": <float -1 to 1>,
+            "confidence_adjustment": <int -20 to +20>
+        }}""",
+        expected_output="JSON with contrarian's attacks",
+        agent=contrarian,
+        context=[value_task, momentum_task, contrarian_task]
+    )
+    
+    # Task 8: Debate Synthesis
+    debate_task = Task(
+        description=f"""Evaluate the debate quality between the three analysts on {ticker}.
+        
+        You have:
+        - 3 initial analyses with scores
+        - 3 cross-attack outputs
+        
+        Analyze:
+        1. Where do they agree? (convergent signals)
+        2. Where do they conflict? (divergent signals)
+        3. Whose attacks were strongest?
+        4. Whose arguments had the most holes?
+        5. How much did confidence shift after attacks?
+        
+        OUTPUT (valid JSON):
+        {{
+            "agreements": "<where analysts align>",
+            "major_conflicts": "<key disagreements>",
+            "strongest_argument": {{
+                "agent": "<value_investor|momentum_trader|contrarian>",
+                "reason": "<why their case is strongest>"
+            }},
+            "weakest_argument": {{
+                "agent": "<value_investor|momentum_trader|contrarian>",
+                "reason": "<why their case is weakest>"
+            }},
+            "confidence_shifts": {{
+                "value_investor": <int -20 to +20>,
+                "momentum_trader": <int -20 to +20>,
+                "contrarian": <int -20 to +20>
+            }},
+            "debate_intensity_score": <float 0 to 1>,
+            "unresolved_risks": ["risk 1", "risk 2"]
+        }}""",
+        expected_output="JSON with debate evaluation",
+        agent=debate_moderator,
+        context=[
+            value_task, momentum_task, contrarian_task,
+            value_attack_task, momentum_attack_task, contrarian_attack_task
+        ]
+    )
+    
+    # Task 9: Chief Final Decision
     chief_task = Task(
-        description=f"""Review all analyst inputs for {ticker} and make your final trading recommendation.
+        description=f"""Make final trading decision on {ticker} after reviewing full debate.
         
-        You will receive:
-        - Fundamental News Analyst: sentiment score + reasoning
-        - Technical Chartist: sentiment score + reasoning
-        {"- Social Sentiment Analyst: sentiment score + reasoning" if include_social else ""}
+        You have:
+        - 3 initial scores + reasoning
+        - 3 attack outputs with revised scores
+        - Debate synthesis with quality evaluation
         
-        Your decision-making process:
-        1. Evaluate agreement/disagreement among analysts
-           - All agree = high confidence
-           - Split signals = lower confidence
+        Decision logic:
+        1. Apply weights:
+           - Value Investor: 35%
+           - Momentum Trader: 30%
+           - Contrarian: 25%
+           - Debate Quality: 10%
         
-        2. Weight the inputs (your discretion):
-           - Fundamentals: Long-term driver
-           - Technicals: Entry/exit timing
-           - Social: Short-term catalyst (if very strong)
+        2. Adjust for agreement:
+           - All 3 agree → high confidence
+           - 2 vs 1 → moderate confidence
+           - All disagree → HOLD
         
-        3. Calculate consensus score
-           - Weighted average of analyst scores
-           - Adjust based on data quality and conviction
+        3. Factor in attacks:
+           - Strong attacks reduce target's weight
+           - Weak defenses reduce confidence
         
-        4. Determine action (BUY/SELL/HOLD)
-           - BUY: consensus score > +0.3
-           - SELL: consensus score < -0.3
-           - HOLD: consensus score between -0.3 and +0.3
+        4. Consider time horizon conflicts:
+           - Value (3-5yr) vs Momentum (1-4wk) → different games
+           - Reconcile or choose dominant timeframe
         
-        5. Set position size
-           - High conviction (score > 0.6): 20-30% allocation
-           - Medium conviction (0.3-0.6): 10-20% allocation
-           - Low conviction (<0.3): 5-10% allocation
-        
-        6. Define risk parameters
-           - Stop loss: Typically 8-15% below entry
-           - Take profit: 2:1 or 3:1 reward-to-risk ratio
-        
-        OUTPUT FORMAT (return as valid JSON):
+        OUTPUT (valid JSON):
         {{
             "consensus_score": <float -1 to 1>,
             "action": "BUY" or "SELL" or "HOLD",
-            "confidence": <integer 0-100>,
-            "reasoning": "<2-3 sentence synthesis of why this decision>",
-            "allocation": <integer 0-30 representing % of portfolio>,
+            "confidence": <int 0-100>,
+            "reasoning": "<2-3 sentence final decision>",
+            "allocation": <int 0-30>,
             "risk_level": "LOW" or "MODERATE" or "HIGH",
             "stop_loss": <float or null>,
-            "take_profit": <float or null>
-        }}
-        
-        Example:
-        {{
-            "consensus_score": 0.62,
-            "action": "BUY",
-            "confidence": 79,
-            "reasoning": "Strong fundamental tailwinds from earnings beat align with bullish technical breakout. Social sentiment provides short-term momentum catalyst. Risk/reward favorable at current levels.",
-            "allocation": 18,
-            "risk_level": "MODERATE",
-            "stop_loss": 238.50,
-            "take_profit": 285.00
+            "take_profit": <float or null>,
+            "time_horizon": "<dominant timeframe>",
+            "key_risks": ["risk 1", "risk 2"],
+            "analyst_weights_used": {{
+                "value_investor": <float 0-1>,
+                "momentum_trader": <float 0-1>,
+                "contrarian": <float 0-1>
+            }}
         }}""",
-        expected_output="JSON object with consensus decision and risk parameters",
-        agent=chief_agent,
-        context=[news_task, tech_task] + ([social_task] if social_task else [])
+        expected_output="JSON with final consensus",
+        agent=chief,
+        context=[
+            value_task, momentum_task, contrarian_task,
+            value_attack_task, momentum_attack_task, contrarian_attack_task,
+            debate_task
+        ]
     )
     
     # ==========================================
     # ASSEMBLE CREW
     # ==========================================
     
-    agents_list = [news_agent, tech_agent]
-    tasks_list = [news_task, tech_task]
+    agents_list = [
+        web_surfer,
+        value_investor,
+        momentum_trader,
+        contrarian
+    ]
     
-    if include_social and social_agent and social_task:
-        agents_list.append(social_agent)
-        tasks_list.append(social_task)
+    tasks_list = [
+        surfer_task,
+        value_task,
+        momentum_task,
+        contrarian_task,
+        value_attack_task,
+        momentum_attack_task,
+        contrarian_attack_task
+    ]
     
-    agents_list.append(chief_agent)
-    tasks_list.append(chief_task)
+    agents_list.extend([debate_moderator, chief])
+    tasks_list.extend([debate_task, chief_task])
     
     crew = Crew(
         agents=agents_list,
         tasks=tasks_list,
-        process=Process.sequential,  # Execute agents one after another
+        process=Process.sequential,
         verbose=True,
-        memory=False,  # Disable memory to avoid token limit issues
-        cache=False    # Disable cache for fresh results each time
+        memory=False,
+        cache=False
     )
     
-    logger.info(f"Crew created with {len(agents_list)} agents and {len(tasks_list)} tasks")
+    logger.info(f"Debate crew created: {len(agents_list)} agents, {len(tasks_list)} tasks")
+    logger.info(f"Flow: Surfer → 3 Analysts → 3 Attacks → Debate → Chief")
     
     return crew
 
 
-# ==========================================
-# HELPER FUNCTION: Quick Test
-# ==========================================
-
 def test_crew(ticker='TSLA', timeframe='30d'):
-    """
-    Quick test function to run crew without Django
-    
-    Usage:
-        python -c "from agents.crew_factory import test_crew; test_crew('AAPL')"
-    """
-    
+    """Test function"""
     print(f"\n{'='*60}")
-    print(f"Testing Sentiment Crew for {ticker}")
+    print(f"Testing Debate Crew for {ticker}")
     print(f"{'='*60}\n")
     
     crew = create_sentiment_crew(ticker, timeframe, include_social=True)
-    
-    print("Starting crew execution...")
     result = crew.kickoff()
     
     print(f"\n{'='*60}")
-    print("CREW EXECUTION COMPLETE")
+    print("EXECUTION COMPLETE")
     print(f"{'='*60}\n")
     print(result)
     
@@ -540,7 +675,6 @@ def test_crew(ticker='TSLA', timeframe='30d'):
 
 
 if __name__ == "__main__":
-    # Allow running this file directly for testing
     import sys
     ticker = sys.argv[1] if len(sys.argv) > 1 else 'TSLA'
     test_crew(ticker)
